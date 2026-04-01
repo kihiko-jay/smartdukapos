@@ -1,0 +1,80 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: dukapos_db
+    environment:
+      POSTGRES_USER: dukapos
+      POSTGRES_PASSWORD: dukapos_pass
+      POSTGRES_DB: dukapos_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dukapos"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: dukapos_redis
+    ports:
+      - "6379:6379"
+
+  api:
+    build: .
+    container_name: dukapos_api
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://dukapos:dukapos_pass@db:5432/dukapos_db
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # ── Sync Agent (dev) ────────────────────────────────────────────────────────
+  # Points CLOUD_API_URL at the local API container.
+  # Uses host-network DB so the agent can reach the same postgres.
+  sync-agent:
+    build:
+      context: ../sync-agent
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: dukapos_sync_agent
+    volumes:
+      - ../sync-agent/src:/app/src      # live reload in dev (restart container to apply)
+      - sync_data:/app/data
+      - sync_logs:/app/logs
+    environment:
+      - NODE_ENV=development
+      - CLOUD_API_URL=http://api:8000/api/v1
+      - LOCAL_DB_HOST=db
+      - LOCAL_DB_PORT=5432
+      - LOCAL_DB_NAME=dukapos_db
+      - LOCAL_DB_USER=dukapos
+      - LOCAL_DB_PASS=dukapos_pass
+      - STORE_ID=1
+      - BATCH_SIZE=50
+      - SYNC_INTERVAL_TRANSACTIONS=10
+      - SYNC_INTERVAL_PRODUCTS=60
+      - SYNC_INTERVAL_CUSTOMERS=60
+      - LOG_LEVEL=debug
+      - RETRY_QUEUE_PATH=/app/data/retry_queue.db
+    depends_on:
+      db:
+        condition: service_healthy
+      api:
+        condition: service_started
+
+volumes:
+  postgres_data:
+  sync_data:
+  sync_logs:

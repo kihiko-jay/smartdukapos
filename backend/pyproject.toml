@@ -1,0 +1,64 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["app", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "SIM",  # flake8-simplify
+    "T20",  # flake8-print (no bare print() in production code)
+    "RUF",  # ruff-specific rules
+]
+ignore = [
+    "E501",   # line too long — handled by formatter
+    "B008",   # do not perform function calls in default arguments (FastAPI Depends)
+    "N803",   # argument name should be lowercase (false positives on _)
+    "N806",   # variable in function should be lowercase
+    "SIM108", # ternary — readability preference
+    "T201",   # print found — acceptable in scripts/
+    "RUF012", # mutable class attributes — SQLAlchemy columns are fine
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+force-sort-within-sections = true
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*"  = ["S101", "T201"]   # assert and print are fine in tests
+"scripts/*" = ["T201"]          # print is fine in scripts
+"alembic/*" = ["E402", "F401"]  # alembic env has specific import patterns
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+filterwarnings = [
+    "ignore::DeprecationWarning:passlib",
+    "ignore::DeprecationWarning:jose",
+]
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["app/seed.py", "alembic/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]

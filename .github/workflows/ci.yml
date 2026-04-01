@@ -1,0 +1,403 @@
+name: DukaPOS CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/dukapos-api
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job 1: Lint + type check
+  # ────────────────────────────────────────────────────────────────────────────
+  lint:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install lint dependencies
+        run: |
+          pip install --upgrade pip
+          pip install ruff==0.4.4 pyright==1.1.369
+
+      - name: Ruff lint
+        run: ruff check app/ tests/ --output-format=github
+
+      - name: Ruff format check
+        run: ruff format app/ tests/ --check
+
+      - name: Pyright type check
+        run: |
+          pip install -r requirements.txt
+          pyright app/
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job 2: Unit + integration tests
+  # ────────────────────────────────────────────────────────────────────────────
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    needs: lint
+
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: dukapos_test
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: dukapos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dukapos_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    defaults:
+      run:
+        working-directory: backend
+
+    env:
+      DATABASE_URL: postgresql://dukapos_test:testpass@localhost:5432/dukapos_test
+      SECRET_KEY: ci-test-secret-key-not-for-production-use
+      SYNC_AGENT_API_KEY: test-sync-key
+      INTERNAL_API_KEY: ""
+      DEBUG: "true"
+      # Leave REDIS_URL unset — tests use in-process fallback
+      MPESA_ENV: sandbox
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest-cov coverage
+
+      - name: Run Alembic migrations against test DB
+        run: alembic upgrade head
+
+      - name: Run test suite
+        run: |
+          pytest tests/ \
+            --tb=short \
+            --cov=app \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --junitxml=test-results.xml \
+            -v
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        if: always()
+        with:
+          file: backend/coverage.xml
+          flags: backend
+          fail_ci_if_error: false
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results-${{ matrix.python-version }}
+          path: backend/test-results.xml
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job 3: Sync agent tests
+  # ────────────────────────────────────────────────────────────────────────────
+  test-sync-agent:
+    name: Sync Agent Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    defaults:
+      run:
+        working-directory: sync-agent
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          # No cache: because no package-lock.json is committed.
+          # Add cache: npm and commit package-lock.json to enable deterministic
+          # installs and significantly faster CI runs (tracked in Issue #7).
+
+      - name: Install dependencies
+        # Using npm install rather than npm ci because package-lock.json is not
+        # yet committed to the repo. Switch to npm ci once the lockfile is added.
+        run: npm install
+
+      - name: Run tests (node:test built-in runner)
+        run: npm test
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sync-agent-test-results
+          path: sync-agent/test-results.xml
+          if-no-files-found: ignore
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job 4: Frontend build + smoke check
+  # Verifies the Vite build succeeds and no import/export errors exist.
+  # A build failure here blocks docker and deploy — catching regressions early.
+  # ────────────────────────────────────────────────────────────────────────────
+  build-frontend:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+    needs: lint
+    defaults:
+      run:
+        working-directory: frontend
+
+    env:
+      # Production build must never have demo mode active
+      VITE_DEMO_MODE: "false"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        # Using npm install until package-lock.json is committed (Issue #7).
+        run: npm install
+
+      - name: Run frontend unit tests (Vitest)
+        run: npm test
+
+      - name: Vite build (production)
+        run: npm run build
+
+      - name: Verify no demo credentials in production bundle
+        run: |
+          if grep -r "james@dukapos\|cashier1234\|admin1234" dist/; then
+            echo "ERROR: Demo credentials found in production bundle!"
+            exit 1
+          fi
+          echo "✅ No demo credentials in production bundle"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+          retention-days: 7
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job 4: Docker build and push (main branch only)
+  # ────────────────────────────────────────────────────────────────────────────
+  docker:
+    name: Build & Push Docker Images
+    runs-on: ubuntu-latest
+    needs: [test, test-sync-agent, build-frontend]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}},event=tag
+
+      - name: Build and push API Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: backend
+          file: backend/Dockerfile
+          target: runtime
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            APP_VERSION=${{ github.sha }}
+
+      - name: Extract metadata for sync agent
+        id: meta-sync
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/dukapos-sync-agent
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}},event=tag
+
+      - name: Build and push sync agent Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: sync-agent
+          file: sync-agent/Dockerfile
+          target: runtime
+          push: true
+          tags: ${{ steps.meta-sync.outputs.tags }}
+          labels: ${{ steps.meta-sync.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Image vulnerability scan — API (Trivy)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          format: sarif
+          output: trivy-results-api.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "0"   # warn but don't fail; set to 1 for blocking scans
+
+      - name: Image vulnerability scan — Sync Agent (Trivy)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ github.repository }}/dukapos-sync-agent:latest
+          format: sarif
+          output: trivy-results-sync.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+
+      - name: Upload Trivy SARIF results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results-api.sarif
+
+      - name: Upload Trivy SARIF results (sync agent)
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results-sync.sarif
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job 5: Deploy to staging (main branch only, after Docker push)
+  # ────────────────────────────────────────────────────────────────────────────
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: docker
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment:
+      name: staging
+      url: ${{ vars.STAGING_URL }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to staging via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:     ${{ secrets.STAGING_SSH_HOST }}
+          username: ${{ secrets.STAGING_SSH_USER }}
+          key:      ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/dukapos
+
+            echo "Pulling latest images..."
+            docker compose -f docker-compose.prod.yml pull api sync-agent
+
+            echo "Running database migrations..."
+            docker compose -f docker-compose.prod.yml run --rm api \
+              sh -c "alembic upgrade head"
+
+            echo "Restarting API with zero-downtime rolling update..."
+            docker compose -f docker-compose.prod.yml up -d --no-deps api
+
+            echo "Restarting sync agent (single replica — safe to restart)..."
+            docker compose -f docker-compose.prod.yml up -d --no-deps sync-agent
+
+            echo "Health check..."
+            sleep 10
+            curl -sf http://localhost:8000/health || (echo "Health check failed!" && exit 1)
+
+            echo "✅ Staging deploy successful — SHA: ${{ github.sha }}"
+
+      - name: Notify Slack on deploy
+        if: always()
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_COLOR:   ${{ job.status == 'success' && 'good' || 'danger' }}
+          SLACK_MESSAGE: |
+            DukaPOS staging deploy ${{ job.status }}
+            Branch: ${{ github.ref_name }}
+            Commit: ${{ github.sha }}
+            By: ${{ github.actor }}
+          SLACK_TITLE: Staging Deploy ${{ job.status }}
+        continue-on-error: true
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job 6: PR preview summary
+  # ────────────────────────────────────────────────────────────────────────────
+  pr-summary:
+    name: PR Summary
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'pull_request'
+    permissions:
+      pull-requests: write
+
+    steps:
+      - name: Download test results
+        uses: actions/download-artifact@v4
+        with:
+          name: test-results-3.12
+          path: artifacts/
+
+      - name: Post test summary to PR
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        with:
+          files: artifacts/test-results.xml
+          comment_title: "🧪 Test Results"
