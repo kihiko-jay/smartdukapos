@@ -11,7 +11,7 @@ import uuid as _uuid
 from sqlalchemy import Column, Integer, String, Numeric, Boolean, DateTime, Text, ForeignKey, UniqueConstraint, Index
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
+from sqlalchemy import func
 from app.database import Base
 
 
@@ -58,6 +58,7 @@ class Product(Base):
     )
 
     id              = Column(Integer, primary_key=True, index=True)
+    store_id        = Column(Integer, ForeignKey("stores.id"), nullable=False, index=True)
     uuid            = Column(UUID(as_uuid=True), default=_uuid.uuid4, unique=True, index=True)
     sku             = Column(String(50),  nullable=False, index=True)
     barcode         = Column(String(100), nullable=True,  index=True)
@@ -83,6 +84,7 @@ class Product(Base):
     updated_at      = Column(DateTime(timezone=True), onupdate=func.now())
 
     category          = relationship("Category",      back_populates="products")
+    store             = relationship("Store")
     supplier          = relationship("Supplier",      back_populates="products")
     transaction_items = relationship("TransactionItem", back_populates="product")
     stock_movements   = relationship("StockMovement",   back_populates="product")

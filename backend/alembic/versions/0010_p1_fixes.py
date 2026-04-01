@@ -10,7 +10,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = "0010_p1_fixes"
-down_revision = "0009_store_id_not_null"
+down_revision = "0009"
 branch_labels = None
 depends_on = None
 

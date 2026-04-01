@@ -62,7 +62,9 @@ async function clearTokens() {
 // Keep a sync-accessible cache so request() doesn't await for every header build
 let _tokenCache = { accessToken: null, refreshToken: null };
 getTokens().then(t => { _tokenCache = t || _tokenCache; });
-
+export function getToken() {
+  return _tokenCache?.accessToken || sessionStorage.getItem("dukapos_access") || null;
+}
 // ── Refresh flow state ────────────────────────────────────────────────────────
 let _refreshPromise = null;   // deduplicate concurrent refresh attempts
 

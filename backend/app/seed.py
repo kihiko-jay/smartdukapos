@@ -1,16 +1,22 @@
 """
 Seed the database with initial data.
-Run once after first migration:  python -m app.seed
+Run once after schema exists:  python -m app.seed
 
 NEVER run this against a production database. Set APP_ENV=production in your
 .env to make this file refuse to execute.
 """
 
 import os
+from datetime import datetime, timezone, timedelta
+
 from app.database import SessionLocal
-# Note: run `alembic upgrade head` before seeding to ensure schema is current.
+# Note: for this repo in Codespaces/local dev, schema may be created via:
+#   from app.database import Base, engine
+#   from app.models import *
+#   Base.metadata.create_all(bind=engine)
 from app.models.product import Product, Category
 from app.models.employee import Employee, Role
+from app.models.subscription import Store, SubStatus, Plan
 from app.core.security import hash_password
 
 
@@ -40,105 +46,100 @@ EMPLOYEES = [
 
 
 def seed():
-    # Hard guard: refuse to run in production environments
     app_env = os.getenv("APP_ENV", "development").lower()
     if app_env == "production":
         raise RuntimeError(
             "seed.py was invoked in a production environment (APP_ENV=production). "
             "This would overwrite real data with demo credentials. Aborting."
         )
-    # Ensure schema is up to date: run `alembic upgrade head` before this.
-    db = SessionLocal()
 
-    # Categories
-    cat_map = {}
-    for cat_name in CATEGORIES:
-        existing = db.query(Category).filter(Category.name == cat_name).first()
-        if not existing:
-            cat = Category(name=cat_name)
-            db.add(cat)
+    db = SessionLocal()
+    try:
+        # Create or fetch demo store first
+        store = db.query(Store).filter(Store.name == "Demo Duka Store").first()
+        if not store:
+            store = Store(
+                name="Demo Duka Store",
+                location="Nairobi, Kenya",
+                kra_pin="P051234567R",
+                plan=Plan.FREE,
+                sub_status=SubStatus.TRIALING,
+                trial_ends_at=datetime.now(timezone.utc) + timedelta(days=14),
+            )
+            db.add(store)
             db.flush()
-            cat_map[cat_name] = cat.id
-        else:
-            cat_map[cat_name] = existing.id
 
-    # Products
-    for p in PRODUCTS:
-        if not db.query(Product).filter(Product.sku == p["sku"]).first():
-            db.add(Product(
-                sku=p["sku"],
-                barcode=p.get("barcode"),
-                name=p["name"],
-                category_id=cat_map.get(p["category"]),
-                selling_price=p["selling_price"],
-                cost_price=p.get("cost_price"),
-                stock_quantity=p["stock_quantity"],
-                reorder_level=p["reorder_level"],
-            ))
+        # Categories
+        cat_map = {}
+        for cat_name in CATEGORIES:
+            existing = (
+                db.query(Category)
+                .filter(Category.store_id == store.id, Category.name == cat_name)
+                .first()
+            )
+            if not existing:
+                cat = Category(store_id=store.id, name=cat_name)
+                db.add(cat)
+                db.flush()
+                cat_map[cat_name] = cat.id
+            else:
+                cat_map[cat_name] = existing.id
 
-    # Employees
-    for e in EMPLOYEES:
-        if not db.query(Employee).filter(Employee.email == e["email"]).first():
-            db.add(Employee(
-                full_name=e["full_name"],
-                email=e["email"],
-                password=hash_password(e["password"]),
-                role=e["role"],
-                pin=e.get("pin"),
-                terminal_id=e.get("terminal_id"),
-            ))
+        # Products
+        for p in PRODUCTS:
+            existing_product = (
+                db.query(Product)
+                .filter(Product.store_id == store.id, Product.sku == p["sku"])
+                .first()
+            )
+            if not existing_product:
+                db.add(
+                    Product(
+                        store_id=store.id,
+                        sku=p["sku"],
+                        barcode=p.get("barcode"),
+                        name=p["name"],
+                        category_id=cat_map.get(p["category"]),
+                        selling_price=p["selling_price"],
+                        cost_price=p.get("cost_price"),
+                        stock_quantity=p["stock_quantity"],
+                        reorder_level=p["reorder_level"],
+                    )
+                )
 
-    db.commit()
-    db.close()
-    print("✅ Database seeded successfully.")
-    print("\n📋 Login credentials:")
-    for e in EMPLOYEES:
-        print(f"   {e['role'].value:12s}  {e['email']:25s}  password: {e['password']}")
-
-
-if __name__ == "__main__":
-    seed()
-
-
-def seed_store():
-    """Call after seed() — creates demo store and links employees to it."""
-    from app.models.subscription import Store, SubStatus, Plan
-    from datetime import datetime, timezone, timedelta
-
-    app_env = os.getenv("APP_ENV", "development").lower()
-    if app_env == "production":
-        raise RuntimeError(
-            "seed_store() was invoked in a production environment (APP_ENV=production). Aborting."
-        )
-    # Ensure schema is up to date: run `alembic upgrade head` before this.
-    db = SessionLocal()
-
-    store = db.query(Store).filter(Store.name == "Demo Duka Store").first()
-    if not store:
-        store = Store(
-            name          = "Demo Duka Store",
-            location      = "Nairobi, Kenya",
-            kra_pin       = "P051234567R",
-            plan          = Plan.FREE,
-            sub_status    = SubStatus.TRIALING,
-            trial_ends_at = datetime.now(timezone.utc) + timedelta(days=14),
-        )
-        db.add(store)
-        db.flush()
-
-        # Link all seeded employees to this store
-        for emp_data in EMPLOYEES:
-            emp = db.query(Employee).filter(Employee.email == emp_data["email"]).first()
-            if emp:
-                emp.store_id = store.id
+        # Employees
+        for e in EMPLOYEES:
+            existing_employee = db.query(Employee).filter(Employee.email == e["email"]).first()
+            if not existing_employee:
+                db.add(
+                    Employee(
+                        store_id=store.id,
+                        full_name=e["full_name"],
+                        email=e["email"],
+                        password=hash_password(e["password"]),
+                        role=e["role"],
+                        pin=e.get("pin"),
+                        terminal_id=e.get("terminal_id"),
+                    )
+                )
+            else:
+                if existing_employee.store_id is None:
+                    existing_employee.store_id = store.id
 
         db.commit()
-        print(f"✅ Demo store created (ID={store.id}) — 14-day trial active.")
-    else:
-        print("ℹ️  Demo store already exists.")
-    db.close()
+
+        print("✅ Database seeded successfully.")
+        print(f"🏪 Demo store: {store.name} (ID={store.id})")
+        print("\n📋 Login credentials:")
+        for e in EMPLOYEES:
+            print(f"   {e['role'].value:12s}  {e['email']:25s}  password: {e['password']}")
+
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 if __name__ == "__main__":
     seed()
-    seed_store()
