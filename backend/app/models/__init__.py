@@ -5,3 +5,8 @@ from app.models.product import Category, Supplier, Product, StockMovement
 from app.models.customer import Customer
 from app.models.transaction import Transaction, TransactionItem, PaymentMethod, TransactionStatus, SyncStatus
 from app.models.audit import AuditTrail, SyncLog
+from app.models.procurement import (
+    ProductPackaging, PurchaseOrder, PurchaseOrderItem,
+    GoodsReceivedNote, GoodsReceivedItem, SupplierInvoiceMatch,
+    POStatus, GRNStatus, InvoiceMatchStatus, PurchaseUnitType,
+)

@@ -45,6 +45,7 @@ class Supplier(Base):
     created_at   = Column(DateTime(timezone=True), server_default=func.now())
 
     products = relationship("Product", back_populates="supplier")
+    purchase_orders = relationship("PurchaseOrder", foreign_keys="PurchaseOrder.supplier_id")
 
 
 class Product(Base):
@@ -85,6 +86,8 @@ class Product(Base):
     supplier          = relationship("Supplier",      back_populates="products")
     transaction_items = relationship("TransactionItem", back_populates="product")
     stock_movements   = relationship("StockMovement",   back_populates="product")
+    packaging         = relationship("ProductPackaging", back_populates="product",
+                                     cascade="all, delete-orphan")
 
     @property
     def is_low_stock(self) -> bool:

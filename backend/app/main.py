@@ -34,7 +34,7 @@ from app.core.notifier import manager as ws_manager
 from app.core.metrics import metrics
 from app.routers import (
     auth, products, transactions, reports, mpesa,
-    etims, subscription, audit, sync, ws, platform,
+    etims, subscription, audit, sync, ws, platform, procurement,
 )
 
 setup_logging()
@@ -226,7 +226,8 @@ app.include_router(etims.router,        prefix=PREFIX)
 app.include_router(subscription.router, prefix=PREFIX)
 app.include_router(audit.router,        prefix=PREFIX)
 app.include_router(sync.router,         prefix=PREFIX)
-app.include_router(platform.router,     prefix=PREFIX)   # NEW: platform owner only
+app.include_router(platform.router,     prefix=PREFIX)
+app.include_router(procurement.router,  prefix=PREFIX)
 app.include_router(ws.router)
 
 

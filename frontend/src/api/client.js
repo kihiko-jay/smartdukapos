@@ -265,3 +265,35 @@ export const subscriptionAPI = {
   register: (data)                     => post("/subscription/register", data),
   upgrade:  (plan, months, mpesaPhone) => post("/subscription/upgrade", { plan, months, mpesa_phone: mpesaPhone }),
 };
+
+export const procurementAPI = {
+  // Packaging
+  listPackaging:   (productId)      => get(`/procurement/products/${productId}/packaging`),
+  upsertPackaging: (productId, d)   => post(`/procurement/products/${productId}/packaging`, d),
+
+  // Purchase Orders
+  listPOs:   (p)   => get("/procurement/purchase-orders", p),
+  getPO:     (id)  => get(`/procurement/purchase-orders/${id}`),
+  createPO:  (d)   => post("/procurement/purchase-orders", d),
+  updatePO:  (id, d) => patch(`/procurement/purchase-orders/${id}`, d),
+  submitPO:  (id)  => post(`/procurement/purchase-orders/${id}/submit`),
+  approvePO: (id)  => post(`/procurement/purchase-orders/${id}/approve`),
+  cancelPO:  (id)  => post(`/procurement/purchase-orders/${id}/cancel`),
+
+  // GRNs
+  listGRNs:  (p)   => get("/procurement/grns", p),
+  getGRN:    (id)  => get(`/procurement/grns/${id}`),
+  createGRN: (d)   => post("/procurement/grns", d),
+  postGRN:   (id)  => post(`/procurement/grns/${id}/post`),
+  cancelGRN: (id)  => post(`/procurement/grns/${id}/cancel`),
+
+  // Invoice Matching
+  listMatches:   (p)       => get("/procurement/invoice-matches", p),
+  getMatch:      (id)      => get(`/procurement/invoice-matches/${id}`),
+  createMatch:   (d)       => post("/procurement/invoice-matches", d),
+  resolveMatch:  (id, d)   => patch(`/procurement/invoice-matches/${id}/resolve`, d),
+
+  // Reports
+  reportReceived: (p) => get("/procurement/reports/received", p),
+  reportOpenPOs:  ()  => get("/procurement/reports/open-pos"),
+};

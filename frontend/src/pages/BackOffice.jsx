@@ -7,8 +7,9 @@ import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContai
 import { useSubscription } from "../hooks/useSubscription";
 import UpgradeWall from "../components/UpgradeWall";
 import TrialBanner from "../components/TrialBanner";
+import ProcurementTab from "./ProcurementTab";
 
-const TABS = ["Overview","Inventory","Transactions","Reports","Sync Monitor","Audit Trail"];
+const TABS = ["Overview","Inventory","Transactions","Reports","Procurement","Sync Monitor","Audit Trail"];
 
 function KPICard({ label, value, sub, accent, delta }) {
   return (
@@ -490,7 +491,7 @@ export default function BackOffice({ onNavigate }) {
   const [activeTab, setActiveTab] = useState("Overview");
   const [showUpgrade, setShowUpgrade] = useState(false);
 
-  const PREMIUM_TABS = ["Inventory","Reports","Sync Monitor","Audit Trail"];
+  const PREMIUM_TABS = ["Inventory","Reports","Procurement","Sync Monitor","Audit Trail"];
   const isLocked = (tab) => PREMIUM_TABS.includes(tab) && !isPremium;
 
   const handleTabClick = (tab) => {
@@ -535,6 +536,7 @@ export default function BackOffice({ onNavigate }) {
         {activeTab === "Inventory"     && <InventoryTab />}
         {activeTab === "Transactions"  && <TransactionsTab />}
         {activeTab === "Reports"       && <ReportsTab />}
+        {activeTab === "Procurement"   && <ProcurementTab />}
         {activeTab === "Sync Monitor"  && <SyncMonitorTab />}
         {activeTab === "Audit Trail"   && <AuditTrailTab />}
       </div>
