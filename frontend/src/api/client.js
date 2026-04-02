@@ -27,9 +27,9 @@ const isElectron = typeof window !== "undefined" && !!window.electron?.app?.isEl
 async function getApiBase() {
   if (isElectron) {
     const base = await window.electron.config.get("apiBase");
-    return base || "http://localhost:8000/api/v1";
+    return base || import.meta.env.VITE_API_URL || "http://localhost:8000/api/v1";
   }
-  return "http://localhost:8000/api/v1";
+  return import.meta.env.VITE_API_URL || "http://localhost:8000/api/v1";
 }
 
 // ── Token storage ─────────────────────────────────────────────────────────────

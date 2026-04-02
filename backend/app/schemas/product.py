@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field,field_validator
 from typing import Annotated
 from typing import Optional, List
 from datetime import datetime
@@ -47,7 +47,7 @@ class ProductBase(BaseModel):
     reorder_level:  int              = 10
     unit:           str              = "piece"
     image_url:      Optional[str]   = None
-
+    
 
 class ProductCreate(ProductBase): pass
 
@@ -74,6 +74,12 @@ class ProductOut(ProductBase):
     supplier:     Optional[SupplierOut] = None
     created_at:   datetime
     updated_at:   Optional[datetime]
+
+    @field_validator("uuid", mode="before")
+    @classmethod
+    def uuid_to_str(cls, v):
+        return str(v)
+
     class Config: from_attributes = True
 
 
