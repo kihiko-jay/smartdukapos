@@ -1,11 +1,14 @@
 /**
- * POSTerminal (v4.2)
+ * POSTerminal (v4.4)
  *
- * Layout redesign:
- *  - LEFT:  search bar + sale items (cart) — this is the main working area
- *  - RIGHT: totals + payment + checkout only
- *  - Search shows a dropdown of results — cashier clicks to add, no auto-add
- *  - No full-screen empty state — left panel always shows the sale in progress
+ * Quick‑add input line:
+ *  - Type item code, barcode, SKU, or product name
+ *  - Press Enter to add the selected / matched product
+ *  - Cursor stays in the input for fast consecutive entry
+ *
+ * Quantity entry:
+ *  - User types quantity directly into a number input (no +/- buttons)
+ *  - Default quantity = 1
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -34,10 +37,12 @@ export default function POSTerminal({ onNavigate }) {
   const [session, setSession]         = useState(null);
   const { isOnline, queueLength, stats, enqueue, syncQueue } = useOfflineQueue();
 
-  const [search,       setSearch]       = useState("");
-  const [results,      setResults]      = useState([]);
-  const [searching,    setSearching]    = useState(false);
+  // Quick-add input
+  const [addInput,    setAddInput]    = useState("");
+  const [results,     setResults]     = useState([]);
+  const [searching,   setSearching]   = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
+  const [selectedIdx, setSelectedIdx] = useState(-1);
 
   const [cart,         setCart]         = useState([]);
   const [paymentMode,  setPaymentMode]  = useState(null);
@@ -50,37 +55,45 @@ export default function POSTerminal({ onNavigate }) {
   const [error,        setError]        = useState("");
 
   const txnKeyRef   = useRef(null);
-  const searchRef   = useRef(null);
+  const inputRef    = useRef(null);
   const dropdownRef = useRef(null);
 
   useEffect(() => { readSession().then(setSession); }, []);
   useEffect(() => { if (isOnline && queueLength > 0) syncQueue(); }, [isOnline]);
 
+  // Auto-focus input on mount and after cart changes
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, [cart]);
+
   // Close dropdown on outside click
   useEffect(() => {
     const handler = (e) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target) &&
-          searchRef.current && !searchRef.current.contains(e.target)) {
+          inputRef.current && !inputRef.current.contains(e.target)) {
         setShowDropdown(false);
+        setSelectedIdx(-1);
       }
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
-  // Search with debounce — shows dropdown, never auto-adds
+  // Debounced search for dropdown when typing (partial name/sku)
   useEffect(() => {
-    if (!search.trim()) {
+    if (!addInput.trim()) {
       setResults([]);
       setShowDropdown(false);
+      setSelectedIdx(-1);
       return;
     }
     const debounce = setTimeout(async () => {
       setSearching(true);
       try {
-        const res = await productsAPI.list({ is_active: true, search: search.trim(), limit: 10 });
+        const res = await productsAPI.list({ is_active: true, search: addInput.trim(), limit: 10 });
         setResults(res);
         setShowDropdown(res.length > 0);
+        setSelectedIdx(res.length > 0 ? 0 : -1);
       } catch (e) {
         setError(e.message);
       } finally {
@@ -88,8 +101,111 @@ export default function POSTerminal({ onNavigate }) {
       }
     }, 300);
     return () => clearTimeout(debounce);
-  }, [search]);
+  }, [addInput]);
 
+  // Try to add a product by exact match (itemcode, barcode, sku)
+  const tryExactMatch = async (input) => {
+    const trimmed = input.trim();
+    if (!trimmed) return null;
+
+    if (/^\d+$/.test(trimmed)) {
+      try {
+        const product = await productsAPI.getByItemCode(trimmed);
+        if (product) return product;
+      } catch { /* not found */ }
+    }
+
+    try {
+      const product = await productsAPI.getByBarcode(trimmed);
+      if (product) return product;
+    } catch { /* not found */ }
+
+    try {
+      const list = await productsAPI.list({ is_active: true, sku: trimmed, limit: 1 });
+      if (list && list.length > 0) return list[0];
+    } catch { /* not found */ }
+
+    return null;
+  };
+
+  const addProductToCart = (product) => {
+    setCart(prev => {
+      const existing = prev.find(i => i.id === product.id);
+      if (existing) {
+        return prev.map(i => i.id === product.id ? { ...i, qty: i.qty + 1 } : i);
+      }
+      return [...prev, { ...product, qty: 1 }];
+    });
+    setAddInput("");
+    setResults([]);
+    setShowDropdown(false);
+    setSelectedIdx(-1);
+    setError("");
+    inputRef.current?.focus();
+  };
+
+  const handleAddItem = async () => {
+    if (!addInput.trim()) return;
+
+    if (showDropdown && selectedIdx >= 0 && results[selectedIdx]) {
+      addProductToCart(results[selectedIdx]);
+      return;
+    }
+
+    if (results.length === 1) {
+      addProductToCart(results[0]);
+      return;
+    }
+
+    const exactProduct = await tryExactMatch(addInput);
+    if (exactProduct) {
+      addProductToCart(exactProduct);
+      return;
+    }
+
+    setError(`No product found for "${addInput}"`);
+    setTimeout(() => setError(""), 3000);
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (!showDropdown || results.length === 0) return;
+      setSelectedIdx(prev => (prev + 1) % results.length);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!showDropdown || results.length === 0) return;
+      setSelectedIdx(prev => (prev - 1 + results.length) % results.length);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      handleAddItem();
+    }
+  };
+
+  // New: handle direct quantity input
+  const handleQtyChange = (id, newQty) => {
+    let qty = parseInt(newQty, 10);
+    if (isNaN(qty) || qty < 1) qty = 1;
+    setCart(prev => prev.map(i => i.id === id ? { ...i, qty } : i));
+  };
+
+  const removeItem = (id) => setCart(prev => prev.filter(i => i.id !== id));
+
+  const clearCart = () => {
+    setCart([]); setPaymentMode(null); setCashInput(""); setMpesaPhone("07");
+    setMpesaStatus(null); setMpesaFailMsg(""); setReceipt(null); setError("");
+    setAddInput(""); setResults([]); setShowDropdown(false); setSelectedIdx(-1);
+    txnKeyRef.current = null;
+    inputRef.current?.focus();
+  };
+
+  const subtotal  = cart.reduce((s, i) => s + parseMoney(i.selling_price) * i.qty, 0);
+  const vatAmount = subtotal * VAT;
+  const total     = subtotal + vatAmount;
+  const cashGiven = parseFloat(cashInput) || 0;
+  const change    = cashGiven - total;
+
+  // Payment & M-PESA handlers (unchanged from original)
   const handlePaymentConfirmed = useCallback((confirmedTxnNumber) => {
     if (txnKeyRef.current === confirmedTxnNumber || receipt?.txn_number === confirmedTxnNumber) {
       setMpesaStatus("confirmed");
@@ -108,36 +224,6 @@ export default function POSTerminal({ onNavigate }) {
     handlePaymentConfirmed,
     handlePaymentFailed,
   );
-
-  const addToCart = (p) => {
-    setCart(prev => {
-      const ex = prev.find(i => i.id === p.id);
-      return ex
-        ? prev.map(i => i.id === p.id ? { ...i, qty: i.qty + 1 } : i)
-        : [...prev, { ...p, qty: 1 }];
-    });
-    setSearch("");
-    setResults([]);
-    setShowDropdown(false);
-    searchRef.current?.focus();
-  };
-
-  const updateQty  = (id, d) => setCart(prev => prev.map(i => i.id === id ? { ...i, qty: Math.max(1, i.qty + d) } : i));
-  const removeItem = (id)    => setCart(prev => prev.filter(i => i.id !== id));
-
-  const clearCart = () => {
-    setCart([]); setPaymentMode(null); setCashInput(""); setMpesaPhone("07");
-    setMpesaStatus(null); setMpesaFailMsg(""); setReceipt(null); setError("");
-    setSearch(""); setResults([]); setShowDropdown(false);
-    txnKeyRef.current = null;
-    setTimeout(() => searchRef.current?.focus(), 50);
-  };
-
-  const subtotal  = cart.reduce((s, i) => s + parseMoney(i.selling_price) * i.qty, 0);
-  const vatAmount = subtotal * VAT;
-  const total     = subtotal + vatAmount;
-  const cashGiven = parseFloat(cashInput) || 0;
-  const change    = cashGiven - total;
 
   const handleMpesaPush = async () => {
     if (!receipt?.id) return;
@@ -225,14 +311,14 @@ export default function POSTerminal({ onNavigate }) {
         .ifield:focus { border-color:#f5a623; }
         .drop-item { padding:10px 14px; cursor:pointer; border-bottom:1px solid #1e2128; display:flex; justify-content:space-between; align-items:center; transition:background 0.1s; }
         .drop-item:last-child { border-bottom: none; }
-        .drop-item:hover { background:#161921; }
-        .qty-btn { width:26px; height:26px; background:#1a1d24; border:1px solid #2a2d35; border-radius:4px; color:#e8e4dc; cursor:pointer; font-size:15px; display:flex; align-items:center; justify-content:center; transition: border-color 0.1s; }
-        .qty-btn:hover { border-color:#f5a623; color:#f5a623; }
+        .drop-item:hover, .drop-item.selected { background:#1a1d24; }
+        .qty-input { width:70px; background:#161921; border:1px solid #2a2d35; border-radius:4px; color:#e8e4dc; font-family:inherit; font-size:12px; padding:6px 8px; text-align:center; outline:none; }
+        .qty-input:focus { border-color:#f5a623; }
       `}</style>
 
       <TitleBar session={session} isOnline={isOnline} queueLength={queueLength} wsConnected={wsConnected} />
 
-      {/* Top bar */}
+      {/* Top bar (unchanged) */}
       <div style={{ background:"#0d0f13", borderBottom:"1px solid #1e2128", padding:"0 20px", display:"flex", alignItems:"center", justifyContent:"space-between", height:48, flexShrink:0 }}>
         <div style={{ display:"flex", alignItems:"center", gap:16 }}>
           <span style={{ fontFamily:"'Syne',sans-serif", fontWeight:800, fontSize:16, color:"#f5a623" }}>DUKA<span style={{ color:"#e8e4dc" }}>POS</span></span>
@@ -261,30 +347,37 @@ export default function POSTerminal({ onNavigate }) {
       {/* Main body */}
       <div style={{ display:"flex", flex:1, overflow:"hidden" }}>
 
-        {/* LEFT: Search + Sale items */}
+        {/* LEFT: Quick-add input + cart */}
         <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden", borderRight:"1px solid #1e2128" }}>
 
-          {/* Search bar */}
+          {/* Quick-add input line */}
           <div style={{ padding:"12px 16px", borderBottom:"1px solid #1e2128", background:"#0d0f13", position:"relative", zIndex:10 }}>
             <input
-              ref={searchRef}
+              ref={inputRef}
               className="ifield"
-              placeholder={searching ? "Searching..." : "🔍  Search by name, SKU or scan barcode..."}
-              value={search}
-              onChange={e => { setSearch(e.target.value); setError(""); }}
-              onFocus={() => results.length > 0 && setShowDropdown(true)}
+              placeholder={searching ? "Searching..." : "🔍  Type item code, barcode, SKU or name, then press ENTER"}
+              value={addInput}
+              onChange={e => { setAddInput(e.target.value); setError(""); }}
+              onKeyDown={handleKeyDown}
               autoFocus
             />
             {/* Results dropdown */}
             {showDropdown && (
               <div ref={dropdownRef} style={{ position:"absolute", top:"calc(100% - 2px)", left:16, right:16, background:"#111316", border:"1px solid #2a2d35", borderTop:"none", borderRadius:"0 0 8px 8px", zIndex:100, maxHeight:300, overflowY:"auto", boxShadow:"0 8px 24px rgba(0,0,0,0.6)" }}>
-                {results.map(p => (
-                  <div key={p.id} className="drop-item" onClick={() => addToCart(p)}>
+                {results.map((p, idx) => (
+                  <div
+                    key={p.id}
+                    className={`drop-item ${selectedIdx === idx ? "selected" : ""}`}
+                    onClick={() => addProductToCart(p)}
+                    onMouseEnter={() => setSelectedIdx(idx)}
+                  >
                     <div>
                       <div style={{ fontSize:12, fontWeight:500, color:"#e8e4dc" }}>
                         {emojis[p.category?.name] || "🛒"} {p.name}
                       </div>
-                      <div style={{ fontSize:10, color:"#555", marginTop:2 }}>{p.sku} · {p.category?.name || "—"}</div>
+                      <div style={{ fontSize:10, color:"#555", marginTop:2 }}>
+                        {p.sku} · {p.category?.name || "—"}
+                      </div>
                     </div>
                     <div style={{ textAlign:"right", flexShrink:0 }}>
                       <div style={{ color:"#f5a623", fontSize:13, fontWeight:500 }}>KES {parseMoney(p.selling_price).toLocaleString()}</div>
@@ -298,7 +391,9 @@ export default function POSTerminal({ onNavigate }) {
 
           {/* Column headers */}
           {cart.length > 0 && (
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 90px 100px 28px", gap:8, padding:"7px 16px", borderBottom:"1px solid #1e2128", fontSize:10, color:"#3a3d45", letterSpacing:"0.06em", flexShrink:0 }}>
+            <div style={{ display:"grid", gridTemplateColumns:"40px 80px 1fr 85px 100px 28px", gap:8, padding:"7px 16px", borderBottom:"1px solid #1e2128", fontSize:10, color:"#3a3d45", letterSpacing:"0.06em", flexShrink:0 }}>
+              <span>#</span>
+              <span>ITEM CODE</span>
               <span>ITEM</span>
               <span style={{ textAlign:"center" }}>QTY</span>
               <span style={{ textAlign:"right" }}>AMOUNT</span>
@@ -306,16 +401,21 @@ export default function POSTerminal({ onNavigate }) {
             </div>
           )}
 
-          {/* Sale items list */}
+          {/* Cart items list */}
           <div style={{ flex:1, overflowY:"auto" }}>
             {cart.length === 0 ? (
               <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"100%", gap:10 }}>
                 <div style={{ fontSize:36, opacity:0.3 }}>🧾</div>
-                <div style={{ fontSize:11, letterSpacing:"0.08em", color:"#2a2d35" }}>NO ITEMS — SEARCH TO ADD</div>
+                <div style={{ fontSize:11, letterSpacing:"0.08em", color:"#2a2d35" }}>TYPE ABOVE AND PRESS ENTER TO ADD</div>
               </div>
             ) : (
-              cart.map(item => (
-                <div key={item.id} style={{ display:"grid", gridTemplateColumns:"1fr 90px 100px 28px", gap:8, padding:"10px 16px", borderBottom:"1px solid #141720", alignItems:"center" }}>
+              cart.map((item, idx) => (
+                <div key={item.id} style={{ display:"grid", gridTemplateColumns:"40px 80px 1fr 85px 100px 28px", gap:8, padding:"10px 16px", borderBottom:"1px solid #141720", alignItems:"center" }}>
+                  {/* Line number */}
+                  <div style={{ fontSize:12, fontWeight:500, color:"#888", textAlign:"center" }}>{idx + 1}</div>
+                  {/* Item code */}
+                  <div style={{ fontSize:11, color:"#888", fontFamily:"monospace" }}>{item.itemcode ?? "—"}</div>
+                  {/* Product name */}
                   <div>
                     <div style={{ fontSize:12, fontWeight:500, color:"#e8e4dc" }}>
                       {emojis[item.category?.name] || "🛒"} {item.name}
@@ -324,14 +424,22 @@ export default function POSTerminal({ onNavigate }) {
                       KES {parseMoney(item.selling_price).toLocaleString()} each
                     </div>
                   </div>
-                  <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:4 }}>
-                    <button className="qty-btn" onClick={() => updateQty(item.id, -1)}>−</button>
-                    <span style={{ width:22, textAlign:"center", fontSize:13 }}>{item.qty}</span>
-                    <button className="qty-btn" onClick={() => updateQty(item.id, 1)}>+</button>
+                  {/* Quantity input (no +/- buttons) */}
+                  <div style={{ display:"flex", justifyContent:"center" }}>
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={item.qty}
+                      onChange={(e) => handleQtyChange(item.id, e.target.value)}
+                      className="qty-input"
+                    />
                   </div>
+                  {/* Line total */}
                   <div style={{ textAlign:"right", fontSize:12, fontWeight:500 }}>
                     KES {(parseMoney(item.selling_price) * item.qty).toLocaleString()}
                   </div>
+                  {/* Remove button */}
                   <button onClick={() => removeItem(item.id)}
                     style={{ background:"none", border:"none", color:"#333", cursor:"pointer", fontSize:13, textAlign:"center", padding:0 }}>✕</button>
                 </div>
@@ -348,7 +456,7 @@ export default function POSTerminal({ onNavigate }) {
           )}
         </div>
 
-        {/* RIGHT: Totals + Payment */}
+        {/* RIGHT: Totals + Payment (unchanged from original) */}
         <div style={{ width:"40%", display:"flex", flexDirection:"column", overflow:"hidden", background:"#0d0f13" }}>
 
           {/* Totals block */}
@@ -448,7 +556,7 @@ export default function POSTerminal({ onNavigate }) {
               </>
             )}
 
-            {/* Receipt */}
+            {/* Receipt (unchanged) */}
             {receipt && (
               <div style={{ background:"#111316", borderRadius:8, padding:16, border:"1px solid #1e2128" }}>
                 <div style={{ textAlign:"center", marginBottom:12 }}>
@@ -480,14 +588,14 @@ export default function POSTerminal({ onNavigate }) {
             {!receipt && cart.length === 0 && (
               <div style={{ textAlign:"center", paddingTop:40, color:"#2a2d35" }}>
                 <div style={{ fontSize:32, marginBottom:8 }}>💳</div>
-                <div style={{ fontSize:10, letterSpacing:"0.08em" }}>ADD ITEMS TO BEGIN</div>
+                <div style={{ fontSize:10, letterSpacing:"0.08em" }}>ADD ITEMS USING THE INPUT ABOVE</div>
               </div>
             )}
           </div>
 
           {/* Status bar */}
           <div style={{ padding:"5px 16px", borderTop:"1px solid #1e2128", fontSize:10, color:"#3a3d45", letterSpacing:"0.06em", display:"flex", justifyContent:"space-between", flexShrink:0 }}>
-            <span>DUKAPOS v4.1.0</span>
+            <span>DUKAPOS v4.4.0</span>
             <span>{stats.failed > 0 ? `⚠ ${stats.failed} FAILED` : stats.pending > 0 ? `${stats.pending} QUEUED` : "eTIMS ACTIVE"}</span>
           </div>
         </div>

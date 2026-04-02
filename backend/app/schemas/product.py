@@ -35,6 +35,7 @@ class SupplierOut(SupplierBase):
 class ProductBase(BaseModel):
     sku:            str
     barcode:        Optional[str]    = None
+    itemcode:       Optional[int]    = None
     name:           str
     description:    Optional[str]   = None
     category_id:    Optional[int]   = None
@@ -59,6 +60,7 @@ class ProductUpdate(BaseModel):
     reorder_level:  Optional[int]   = None
     is_active:      Optional[bool]  = None
     barcode:        Optional[str]   = None
+    itemcode:       Optional[int]   = None
     category_id:    Optional[int]   = None
     supplier_id:    Optional[int]   = None
     tax_code:       Optional[str]   = None

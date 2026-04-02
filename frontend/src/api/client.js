@@ -218,6 +218,7 @@ export const productsAPI = {
   list:         (p)     => get("/products", p),
   getById:      (id)    => get(`/products/${id}`),
   getByBarcode: (bc)    => get(`/products/barcode/${bc}`),
+  getByItemCode: (code)  => get(`/products/itemcode/${code}`),
   categories:   ()      => get("/products/categories"),
   suppliers:    ()      => get("/products/suppliers"),
   create:       (d)     => post("/products", d),

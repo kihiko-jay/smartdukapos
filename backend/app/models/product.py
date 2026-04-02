@@ -62,6 +62,7 @@ class Product(Base):
     uuid            = Column(UUID(as_uuid=True), default=_uuid.uuid4, unique=True, index=True)
     sku             = Column(String(50),  nullable=False, index=True)
     barcode         = Column(String(100), nullable=True,  index=True)
+    itemcode        = Column(Integer, nullable=True, index=True)  # NEW: numeric code for fast POS lookup
     name            = Column(String(200), nullable=False)
     description     = Column(Text, nullable=True)
     category_id     = Column(Integer, ForeignKey("categories.id"), nullable=True)
